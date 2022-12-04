@@ -1,6 +1,7 @@
 # USB keyboard driver for Rapsberry Pi Pico with TinyUSB
 ラズベリーパイPicoのUSBコネクタにUSBキーボードを接続して利用するためのドライバです。  
 ただし、現時点で動作は不安定で一切の保証いたしません。  
+![](usbkb.jpg)  
 
 ## 利用環境
 ・Raspberry Pi Pico  
