@@ -7,47 +7,7 @@
 #include "../lcd-lib/graphlib.h"
 
 
-//--------------------------------------------------------------------+
-// USB CDC
-//--------------------------------------------------------------------+
-#if CFG_TUH_CDC
-CFG_TUSB_MEM_SECTION static char serial_in_buffer[64] = { 0 };
-
-void tuh_mount_cb(uint8_t dev_addr)
-{
-  // application set-up
-  printf("A device with address %d is mounted\r\n", dev_addr);
-
-  tuh_cdc_receive(dev_addr, serial_in_buffer, sizeof(serial_in_buffer), true); // schedule first transfer
-}
-
-void tuh_umount_cb(uint8_t dev_addr)
-{
-  // application tear-down
-  printf("A device with address %d is unmounted \r\n", dev_addr);
-}
-
-// invoked ISR context
-void tuh_cdc_xfer_isr(uint8_t dev_addr, xfer_result_t event, cdc_pipeid_t pipe_id, uint32_t xferred_bytes)
-{
-  (void) event;
-  (void) pipe_id;
-  (void) xferred_bytes;
-
-  printf(serial_in_buffer);
-  tu_memclr(serial_in_buffer, sizeof(serial_in_buffer));
-
-  tuh_cdc_receive(dev_addr, serial_in_buffer, sizeof(serial_in_buffer), true); // waiting for next data
-}
-
-void cdc_task(void)
-{
-
-}
-
-#endif
-
-void led_blinking_task(void) {
+void led_blinking_task(int cursor_on) {
     const uint32_t interval_ms = 250;
     static uint32_t start_ms = 0;
 
@@ -60,9 +20,11 @@ void led_blinking_task(void) {
     board_led_write(led_state);
     led_state = 1 - led_state; // toggle
 
-    cursorchar^=0x87;
-    printchar(cursorchar);
-    cursor--;
+    if(cursor_on){
+      cursorchar^=0x87;
+      printchar(cursorchar);
+      cursor--;
+    }
 }
 
 int main(void) {
@@ -91,30 +53,32 @@ int main(void) {
 	gpio_init(PICO_DEFAULT_LED_PIN);  // on board LED
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-    lockkey=1; // 下位3ビットが<SCRLK><CAPSLK><NUMLK>
-    keytype=0; // 0：日本語109キー、1：英語104キー
-    if(hidkb_init()){
-        return 1;
+  lockkey=1; // 下位3ビットが<SCRLK><CAPSLK><NUMLK>
+  keytype=0; // 0：日本語109キー、1：英語104キー
+  if(usbkb_init()){
+      return 1;
+  }
+  printstr("Init USB OK\n");
+  while(1){
+    usbkb_polling();
+    if(usbkb_mounted()){
+      printstr("USB Keyboard found\n");
+      break;
     }
-    printstr("Init USB OK\n");
-    sleep_ms(100);
+    led_blinking_task(0);
+    sleep_ms(1);
+  }
 
-    while (1) {
-      tuh_task();
-      usbkb_polling_task();
-//      lockkeychangedevent();
-
-#if CFG_TUH_CDC
-    cdc_task();
-#endif
-        uint8_t ch=usbreadkey();
-        uint8_t vk=(uint8_t)vkey;
-        uint8_t sh=vkey>>8;
-        if(ch) printchar(ch);
-        if(vk==VK_RETURN) printstr(" \n");
-        led_blinking_task();
-//        sleep_ms(16);
+  while (1) {
+    usbkb_polling();
+    if(usbkb_mounted()){
+      uint8_t ch=usbreadkey();
+      uint8_t vk=(uint8_t)vkey;
+      uint8_t sh=vkey>>8;
+      if(ch) printchar(ch);
+      if(vk==VK_RETURN) printstr(" \n");
     }
-
-    return 0;
+    led_blinking_task(1);
+    sleep_ms(1);
+  }
 }

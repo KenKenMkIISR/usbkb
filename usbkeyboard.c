@@ -5,7 +5,7 @@
 #include "../lcd-lib/LCDdriver.h"
 #include "../lcd-lib/graphlib.h"
 
-//#define DEBUG
+//#define USBKBDEBUG
 
 //--------------------------------------------------------------------+
 // MACRO TYPEDEF CONSTANT ENUM DECLARATION
@@ -26,7 +26,7 @@ volatile uint8_t ps2keystatus[256]; // 仮想コードに相当するキーの�
 volatile uint16_t vkey; // ps2readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
 uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
-static bool lockkeychanged=0;
+static bool lockkeychanged;
 
 static uint8_t USBKB_dev_addr=0xFF;
 static uint8_t USBKB_instance;
@@ -69,11 +69,11 @@ void shiftkeycheck(uint8_t const modifier){
 	if(ps2shiftkey_a & (CHK_WIN_L | CHK_WIN_R)) ps2shiftkey|=CHK_WIN;
 }
 
-#ifdef DEBUG
+#ifdef USBKBDEBUG
 void dispkeys(hid_keyboard_report_t const *p_report);
 #endif
 void process_kbd_report(hid_keyboard_report_t const *p_new_report) {
-#ifdef DEBUG
+#ifdef USBKBDEBUG
   dispkeys(p_new_report);
 #endif
   // hid keyboard reportをusbkb_reportに取り込む
@@ -82,7 +82,7 @@ void process_kbd_report(hid_keyboard_report_t const *p_new_report) {
   if(p_new_report->keycode[0]!=1) usbkb_report=*p_new_report;
 }
 
-void usbkb_polling_task(void){
+void usbkb_task(void){
 // 押下中のHIDキーコードを読み出し、仮想キーコードに変換
 // keycodebufにためる
     static hid_keyboard_report_t prev_report = {0, 0, {0}}; // previous report to check key released
@@ -151,7 +151,7 @@ void usbkb_polling_task(void){
   if(lockkeychanged){
     // Set Lock keys LED
     tuh_hid_set_report(USBKB_dev_addr,USBKB_instance,0,HID_REPORT_TYPE_OUTPUT,&lockkey,sizeof(lockkey));
-#ifdef DEBUG
+#ifdef USBKBDEBUG
     printnum(lockkey);
     printstr("Set LED completed\n");
 #endif
@@ -161,20 +161,7 @@ void usbkb_polling_task(void){
     prev_report = *p_usbkb_report;
 }
 
-/*
-void lockkeychangedevent(void){
-  if(lockkeychanged){
-    // Set Lock keys LED
-    tuh_hid_set_report(USBKB_dev_addr,USBKB_instance,0,HID_REPORT_TYPE_OUTPUT,&lockkey,sizeof(lockkey));
-#ifdef DEBUG
-    printnum(lockkey);
-    printstr("Set LED completed\n");
-#endif
-    lockkeychanged=false;
-  }
-}
-*/
-
+#ifdef USBKBDEBUG
 static void printhex2(int i){
     int h=(i>>4)&0xf;
     if(h<10) printchar('0'+h);
@@ -183,7 +170,6 @@ static void printhex2(int i){
     if(h<10) printchar('0'+h);
     else printchar('A'+h-10);
 }
-#ifdef DEBUG
 void dispkeys(hid_keyboard_report_t const *p_report){
     unsigned char *cursor2;
     cursor2=cursor;
@@ -268,20 +254,7 @@ void cursor_movement(int8_t x, int8_t y, int8_t wheel)
 
 static void process_mouse_report(hid_mouse_report_t const * report)
 {
-  static hid_mouse_report_t prev_report = { 0 };
 
-  //------------- button state  -------------//
-  uint8_t button_changed_mask = report->buttons ^ prev_report.buttons;
-  if ( button_changed_mask & report->buttons)
-  {
-    printf(" %c%c%c ",
-       report->buttons & MOUSE_BUTTON_LEFT   ? 'L' : '-',
-       report->buttons & MOUSE_BUTTON_MIDDLE ? 'M' : '-',
-       report->buttons & MOUSE_BUTTON_RIGHT  ? 'R' : '-');
-  }
-
-  //------------- cursor movement -------------//
-  cursor_movement(report->x, report->y, report->wheel);
 }
 
 // Each HID instance can has multiple reports
@@ -294,9 +267,7 @@ static struct
 //--------------------------------------------------------------------+
 // Generic Report
 //--------------------------------------------------------------------+
-// Invoked when received report from device via interrupt endpoint
-//static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
-void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
+static void process_generic_report(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
 {
   (void) dev_addr;
 
@@ -329,9 +300,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
 
   if (!rpt_info)
   {
-#ifdef DEBUG
-    printstr("Couldn't find the report info for this report !\n");
-#endif
+//    printf("Couldn't find the report info for this report !\r\n");
     return;
   }
 
@@ -361,20 +330,50 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
       default: break;
     }
   }
-  // continue to request to receive report
-  tuh_hid_receive_report(dev_addr, instance);
 }
 
 //--------------------------------------------------------------------+
 // TinyUSB Callbacks
 //--------------------------------------------------------------------+
 
+// Invoked when received report from device via interrupt endpoint
+void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
+{
+  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+
+if(!usbkb_mounted()) return;
+
+  switch (itf_protocol)
+  {
+    case HID_ITF_PROTOCOL_KEYBOARD:
+      TU_LOG2("HID receive boot keyboard report\r\n");
+      process_kbd_report( (hid_keyboard_report_t const*) report );
+    break;
+
+    case HID_ITF_PROTOCOL_MOUSE:
+      TU_LOG2("HID receive boot mouse report\r\n");
+      process_mouse_report( (hid_mouse_report_t const*) report );
+    break;
+
+    default:
+      // Generic report requires matching ReportID and contents with previous parsed report info
+      process_generic_report(dev_addr, instance, report, len);
+    break;
+  }
+
+  // continue to request to receive report
+  if ( !tuh_hid_receive_report(dev_addr, instance) )
+  {
+    printstr("Error: cannot request to receive report\n");
+  }
+}
+
 // Invoked when device with hid interface is mounted
 // Report descriptor is also available for use. tuh_hid_parse_report_descriptor()
 // can be used to parse common/simple enough descriptor.
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
 {
-#ifdef DEBUG
+#ifdef USBKBDEBUG
   printstr("HID device address = ");
   printnum(dev_addr);
   printstr(", instance = ");
@@ -383,11 +382,11 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 #endif
 
   // Interface protocol (hid_interface_protocol_enum_t)
-  const char* protocol_str[] = { "None", "Keyboard", "Mouse" };
   uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
 
   hid_info[instance].report_count = tuh_hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
-#ifdef DEBUG
+#ifdef USBKBDEBUG
+  const char* protocol_str[] = { "None", "Keyboard", "Mouse" };
   printstr("HID has ");
   printnum(hid_info[instance].report_count);
   printstr("reports and interface protocol = ");
@@ -410,7 +409,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
   // tuh_hid_report_received_cb() will be invoked when report is available
   if ( !tuh_hid_receive_report(dev_addr, instance) )
   {
-#ifdef DEBUG
+#ifdef USBKBDEBUG
     printstr("Error: cannot request to receive report\n");
 #endif
   }
@@ -418,7 +417,7 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
 
 void tuh_hid_set_report_complete_cb(uint8_t dev_addr, uint8_t instance, uint8_t report_id, uint8_t report_type, uint16_t len)
 {
-#ifdef DEBUG
+#ifdef USBKBDEBUG
   printstr("HID set report completed\n");
   printstr("dev_addr ");printnum(dev_addr);printchar('\n');
   printstr("instance ");printnum(instance);printchar('\n');
@@ -429,7 +428,7 @@ void tuh_hid_set_report_complete_cb(uint8_t dev_addr, uint8_t instance, uint8_t 
 }
 void tuh_hid_report_sent_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
 {
-#ifdef DEBUG
+#ifdef USBKBDEBUG
   printstr("HID report sent\n");
   printstr("dev_addr ");printnum(dev_addr);printchar('\n');
   printstr("instance ");printnum(instance);printchar('\n');
@@ -447,7 +446,7 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
   if(dev_addr==USBKB_dev_addr){
     USBKB_dev_addr=0xFF;
   }
-#ifdef DEBUG
+#ifdef USBKBDEBUG
   printstr("HID device address = ");
   printnum(dev_addr);
   printstr(", instance = ");
@@ -456,65 +455,21 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 #endif
 }
 
-/*
-// Invoked when received report from device via interrupt endpoint
-void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
-{
-  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
-
-  switch (itf_protocol)
-  {
-    case HID_ITF_PROTOCOL_KEYBOARD:
-      TU_LOG2("HID receive boot keyboard report\r\n");
-      process_kbd_report( (hid_keyboard_report_t const*) report );
-//      dispkeys((hid_keyboard_report_t const*) report);
-    break;
-
-    case HID_ITF_PROTOCOL_MOUSE:
-      TU_LOG2("HID receive boot mouse report\r\n");
-      process_mouse_report( (hid_mouse_report_t const*) report );
-    break;
-
-    default:
-      // Generic report requires matching ReportID and contents with previous parsed report info
-//      process_generic_report(dev_addr, instance, report, len);
-    break;
-  }
-
-  // continue to request to receive report
-  if ( !tuh_hid_receive_report(dev_addr, instance) )
-  {
-#ifdef DEBUG
-    printstr("Error: cannot request to receive report\n");
-#endif
-  }
-}
-*/
-
-/*
-static repeating_timer_t usbkb_repeat_timer;
-bool usbkb_task(repeating_timer_t *rt){
-      tuh_task();
-      usbkb_polling_task();
-      lockkeychangedevent();
-      return true;
-}
-*/
-bool hidkb_init(void){
-
-    printstr("Initializing USB...");
+bool usbkb_init(void){
+//    printstr("Initializing USB...");
     tusb_init();
-    printstr("OK\n");
-/*
-    // Call usbkb_task() every 10ms
-    if (!add_repeating_timer_us(-10000 , usbkb_task, NULL, &usbkb_repeat_timer)) {
-        printstr("Failed to add timer\n");
-        return 1;
-    }
-*/
+//    printstr("OK\n");
     return 0;
 }
 
+void usbkb_polling(void){
+  tuh_task();
+  usbkb_task();
+}
+
+bool usbkb_mounted(void){
+  return USBKB_dev_addr!=0xFF?true:false;
+}
 uint8_t usbreadkey(void){
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
 // 下位8ビット：キーコード

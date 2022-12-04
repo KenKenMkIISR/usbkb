@@ -178,9 +178,9 @@ extern volatile uint16_t vkey; //仮想キーコード
 extern uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 extern uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
 
-bool hidkb_init(void); // USBキーボードライブラリ初期化
-void usbkb_polling_task(void);
-//void lockkeychangedevent(void);
+bool usbkb_init(void); // USBキーボードライブラリ初期化
+void usbkb_polling(void); // USBキーボード利用時に常時ポーリングするタスク
+bool usbkb_mounted(void); // USBキーボードが接続されていればtrue
 unsigned char shiftkeys(void); // SHIFT関連キーの押下状態を返す
 unsigned char usbreadkey(void);
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
@@ -189,6 +189,4 @@ unsigned char usbreadkey(void);
 // 英数・記号文字の場合、戻り値としてASCIIコード（それ以外は0を返す）
 
 // Macro(s) follows(s)
-extern uint16_t * volatile keycodebufp1; //キーコード書き込み先頭ポインタ
-extern uint16_t * volatile keycodebufp2; //キーコード読み出し先頭ポインタ
 #define keycodeExists() (keycodebufp1!=keycodebufp2)
