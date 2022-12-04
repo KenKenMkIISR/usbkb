@@ -17,11 +17,13 @@
 　lockkey　下位3ビットが　SCRLK / CAPSLK / NUMLKを表す  
 　keytype　0：日本語109キー　1：英語104キー  
   
-main.cの動作には下記から3ファイルをダウンロードし、../lcd-lib/ディレクトリに入れておく必要があります。  
+main.cの動作には下記からファイルをダウンロードし、../lcd-lib/ディレクトリに入れておく必要があります。  
 https://github.com/KenKenMkIISR/Pico-LCD-Text-Graph  
 ili9341_spi.c  
 graphlib.c  
 fontdata.c  
+LCDdriver.h  
+graphlib.h  
   
 ## 制限事項
 ・電源オン時にNumLock等のLEDがつかないことが多い  
