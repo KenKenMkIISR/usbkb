@@ -60,25 +60,31 @@ int main(void) {
   }
   printstr("Init USB OK\n");
   while(1){
-    usbkb_polling();
-    if(usbkb_mounted()){
-      printstr("USB Keyboard found\n");
-      break;
+    while(1){
+      usbkb_polling();
+      if(usbkb_mounted()){
+        printstr("USB Keyboard found\n");
+        break;
+      }
+      led_blinking_task(0);
+//      sleep_ms(1);
     }
-    led_blinking_task(0);
-    sleep_ms(1);
-  }
+    while (1) {
+      usbkb_polling();
+      if(usbkb_mounted()){
+        uint8_t ch=usbkb_readkey();
+        uint8_t vk=(uint8_t)vkey;
+        uint8_t sh=vkey>>8;
+        if(ch) printchar(ch);
+        if(vk==VK_RETURN) printstr(" \n");
+      }
+      else{
+        printstr("\nUSB Keyboard unmounted\n");
+        break;
+      }
+      led_blinking_task(1);
+//      sleep_ms(1);
+    }
 
-  while (1) {
-    usbkb_polling();
-    if(usbkb_mounted()){
-      uint8_t ch=usbreadkey();
-      uint8_t vk=(uint8_t)vkey;
-      uint8_t sh=vkey>>8;
-      if(ch) printchar(ch);
-      if(vk==VK_RETURN) printstr(" \n");
-    }
-    led_blinking_task(1);
-    sleep_ms(1);
   }
 }

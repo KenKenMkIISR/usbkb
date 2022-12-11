@@ -15,19 +15,21 @@
 #define USE_ANSI_ESCAPE   0
 #define MAX_REPORT  4
 
-uint16_t volatile ps2shiftkey_a; //シフト、コントロールキー等の状態（左右キー区別）
-uint8_t volatile ps2shiftkey; //シフト、コントロールキー等の状態（左右キー区別なし）
+uint16_t volatile usbkb_shiftkey_a; //シフト、コントロールキー等の状態（左右キー区別）
+uint8_t volatile usbkb_shiftkey; //シフト、コントロールキー等の状態（左右キー区別なし）
 uint16_t keycodebuf[KEYCODEBUFSIZE]; //キーコードバッファ
 uint16_t * volatile keycodebufp1; //キーコード書き込み先頭ポインタ
 uint16_t * volatile keycodebufp2; //キーコード読み出し先頭ポインタ
 
 //公開変数
-volatile uint8_t ps2keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
-volatile uint16_t vkey; // ps2readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
+volatile uint8_t usbkb_keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
+volatile uint16_t vkey; // usbkb_readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
 uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
-static bool lockkeychanged;
 
+#define USBKBLED_TIMER_INTERVAL 10;
+static uint32_t usbkbled_timer=0;
+static bool lockkeychanged;
 static uint8_t USBKB_dev_addr=0xFF;
 static uint8_t USBKB_instance;
 static hid_keyboard_report_t usbkb_report;
@@ -36,21 +38,21 @@ void lockkeycheck(uint8_t const vk){
   switch (vk)
   {
     case VK_NUMLOCK:
-      ps2shiftkey_a^=CHK_NUMLK_A;
-      ps2shiftkey  ^=CHK_NUMLK;
+      usbkb_shiftkey_a^=CHK_NUMLK_A;
+      usbkb_shiftkey  ^=CHK_NUMLK;
       lockkey ^= KEYBOARD_LED_NUMLOCK;
       lockkeychanged=true;
       break;
     case VK_CAPITAL:
-      if((ps2shiftkey & CHK_SHIFT)==0) break;
-      ps2shiftkey_a^=CHK_CAPSLK_A;
-      ps2shiftkey  ^=CHK_CAPSLK;
+      if((usbkb_shiftkey & CHK_SHIFT)==0) break;
+      usbkb_shiftkey_a^=CHK_CAPSLK_A;
+      usbkb_shiftkey  ^=CHK_CAPSLK;
       lockkey ^= KEYBOARD_LED_CAPSLOCK;
       lockkeychanged=true;
       break;
     case VK_SCROLL:
-      ps2shiftkey_a^=CHK_SCRLK_A;
-      ps2shiftkey  ^=CHK_SCRLK;
+      usbkb_shiftkey_a^=CHK_SCRLK_A;
+      usbkb_shiftkey  ^=CHK_SCRLK;
       lockkey ^= KEYBOARD_LED_SCROLLLOCK;
       lockkeychanged=true;
       break;
@@ -61,12 +63,12 @@ void lockkeycheck(uint8_t const vk){
 
 void shiftkeycheck(uint8_t const modifier){
 // SHIFT,ALT,CTRL,Winキーの押下状態を更新
-  ps2shiftkey_a = (ps2shiftkey_a & 0xff00) | modifier;
-	ps2shiftkey &= CHK_SCRLK | CHK_NUMLK | CHK_CAPSLK;
-	if(ps2shiftkey_a & (CHK_SHIFT_L | CHK_SHIFT_R)) ps2shiftkey|=CHK_SHIFT;
-	if(ps2shiftkey_a & (CHK_CTRL_L | CHK_CTRL_R)) ps2shiftkey|=CHK_CTRL;
-	if(ps2shiftkey_a & (CHK_ALT_L | CHK_ALT_R)) ps2shiftkey|=CHK_ALT;
-	if(ps2shiftkey_a & (CHK_WIN_L | CHK_WIN_R)) ps2shiftkey|=CHK_WIN;
+  usbkb_shiftkey_a = (usbkb_shiftkey_a & 0xff00) | modifier;
+	usbkb_shiftkey &= CHK_SCRLK | CHK_NUMLK | CHK_CAPSLK;
+	if(usbkb_shiftkey_a & (CHK_SHIFT_L | CHK_SHIFT_R)) usbkb_shiftkey|=CHK_SHIFT;
+	if(usbkb_shiftkey_a & (CHK_CTRL_L | CHK_CTRL_R)) usbkb_shiftkey|=CHK_CTRL;
+	if(usbkb_shiftkey_a & (CHK_ALT_L | CHK_ALT_R)) usbkb_shiftkey|=CHK_ALT;
+	if(usbkb_shiftkey_a & (CHK_WIN_L | CHK_WIN_R)) usbkb_shiftkey|=CHK_WIN;
 }
 
 #ifdef USBKBDEBUG
@@ -85,69 +87,76 @@ void process_kbd_report(hid_keyboard_report_t const *p_new_report) {
 void usbkb_task(void){
 // 押下中のHIDキーコードを読み出し、仮想キーコードに変換
 // keycodebufにためる
-    static hid_keyboard_report_t prev_report = {0, 0, {0}}; // previous report to check key released
-    static uint16_t oldvkey=0;
-    static uint32_t keyrepeattime=0;
-    uint16_t vkey;
-    hid_keyboard_report_t *p_usbkb_report=&usbkb_report;
+  static hid_keyboard_report_t prev_report = {0, 0, {0}}; // previous report to check key released
+  static uint16_t oldvkey=0;
+  static uint32_t keyrepeattime=0;
+  uint16_t vkey;
+  hid_keyboard_report_t *p_usbkb_report=&usbkb_report;
 
-    if(USBKB_dev_addr==0xFF) return;
-    vkey=0;
-    shiftkeycheck(p_usbkb_report->modifier);
-    for (uint8_t i = 0; i < 6; i++) {
-        uint8_t vk;
-        if(keytype==1) vk=hidkey2virtualkey_en[p_usbkb_report->keycode[i]];
-        else vk=hidkey2virtualkey_jp[p_usbkb_report->keycode[i]];
-        if(vk==0) continue;
-        vkey=vk;
-        if(ps2keystatus[vk]) continue; // 前回も押されていた場合は無視
-        if((ps2shiftkey & CHK_CTRL)==0) lockkeycheck(vk); //NumLock、CapsLock、ScrollLock反転処理
-        if((keycodebufp1+1==keycodebufp2) ||
-            (keycodebufp1==keycodebuf+KEYCODEBUFSIZE-1)&&(keycodebufp2==keycodebuf)){
-            break; //バッファがいっぱいの場合無視
-        }
-        *keycodebufp1++=((uint16_t)ps2shiftkey<<8)+vk;
-        if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
+  if(!usbkb_mounted()) return;
+  vkey=0;
+  shiftkeycheck(p_usbkb_report->modifier);
+  for (uint8_t i = 0; i < 6; i++) {
+    uint8_t vk;
+    if(keytype==1) vk=hidkey2virtualkey_en[p_usbkb_report->keycode[i]];
+    else vk=hidkey2virtualkey_jp[p_usbkb_report->keycode[i]];
+    if(vk==0) continue;
+    vkey=vk;
+    if(usbkb_keystatus[vk]) continue; // 前回も押されていた場合は無視
+    if((usbkb_shiftkey & CHK_CTRL)==0) lockkeycheck(vk); //NumLock、CapsLock、ScrollLock反転処理
+    if((keycodebufp1+1==keycodebufp2) ||
+        (keycodebufp1==keycodebuf+KEYCODEBUFSIZE-1)&&(keycodebufp2==keycodebuf)){
+        break; //バッファがいっぱいの場合無視
     }
-    vkey|=(uint16_t)ps2shiftkey<<8;
-    if(vkey & 0xff && vkey==oldvkey){
-        if(time_us_32() >= keyrepeattime){
-            keyrepeattime+=KEYREPEAT2*1000;
-            if((keycodebufp1+1!=keycodebufp2) &&
-                    (keycodebufp1!=keycodebuf+KEYCODEBUFSIZE-1)||(keycodebufp2!=keycodebuf)){
-                *keycodebufp1++=vkey;
-                if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
-            }
-        }
-    }
-    else{
-        oldvkey=vkey;
-        keyrepeattime=time_us_32()+KEYREPEAT1*1000;
-    }
-    // 前回押されていたキーステータスをいったん全てクリア
-    for (uint8_t i = 0; i < 6; i++) {
-        uint8_t vk;
-        if(keytype==1) vk=hidkey2virtualkey_en[prev_report.keycode[i]];
-        else vk=hidkey2virtualkey_jp[prev_report.keycode[i]];
-        if(vk) ps2keystatus[vk]=0;
-    }
-    // 今回押されているキーステータスをセット
-    for (uint8_t i = 0; i < 6; i++) {
-        uint8_t vk;
-        if(keytype==1) vk=hidkey2virtualkey_en[p_usbkb_report->keycode[i]];
-        else vk=hidkey2virtualkey_jp[p_usbkb_report->keycode[i]];
-        if(vk) ps2keystatus[vk]=1;
-    }
-    // シフト関連キーのステータスを書き換え
-    if(p_usbkb_report->modifier & CHK_SHIFT_L) ps2keystatus[VK_LSHIFT]=1; else ps2keystatus[VK_LSHIFT]=0;
-    if(p_usbkb_report->modifier & CHK_SHIFT_R) ps2keystatus[VK_RSHIFT]=1; else ps2keystatus[VK_RSHIFT]=0;
-    if(p_usbkb_report->modifier & CHK_CTRL_L) ps2keystatus[VK_LCONTROL]=1; else ps2keystatus[VK_LCONTROL]=0;
-    if(p_usbkb_report->modifier & CHK_CTRL_R) ps2keystatus[VK_RCONTROL]=1; else ps2keystatus[VK_RCONTROL]=0;
-    if(p_usbkb_report->modifier & CHK_ALT_L) ps2keystatus[VK_LMENU]=1; else ps2keystatus[VK_LMENU]=0;
-    if(p_usbkb_report->modifier & CHK_ALT_R) ps2keystatus[VK_RMENU]=1; else ps2keystatus[VK_RMENU]=0;
-    if(p_usbkb_report->modifier & CHK_WIN_L) ps2keystatus[VK_LWIN]=1; else ps2keystatus[VK_LWIN]=0;
-    if(p_usbkb_report->modifier & CHK_WIN_R) ps2keystatus[VK_RWIN]=1; else ps2keystatus[VK_RWIN]=0;
+    *keycodebufp1++=((uint16_t)usbkb_shiftkey<<8)+vk;
+    if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
+  }
+  vkey|=(uint16_t)usbkb_shiftkey<<8;
+  if(vkey & 0xff && vkey==oldvkey){
+      if(time_us_32() >= keyrepeattime){
+          keyrepeattime+=KEYREPEAT2*1000;
+          if((keycodebufp1+1!=keycodebufp2) &&
+                  (keycodebufp1!=keycodebuf+KEYCODEBUFSIZE-1)||(keycodebufp2!=keycodebuf)){
+              *keycodebufp1++=vkey;
+              if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
+          }
+      }
+  }
+  else{
+      oldvkey=vkey;
+      keyrepeattime=time_us_32()+KEYREPEAT1*1000;
+  }
+  // 前回押されていたキーステータスをいったん全てクリア
+  for (uint8_t i = 0; i < 6; i++) {
+      uint8_t vk;
+      if(keytype==1) vk=hidkey2virtualkey_en[prev_report.keycode[i]];
+      else vk=hidkey2virtualkey_jp[prev_report.keycode[i]];
+      if(vk) usbkb_keystatus[vk]=0;
+  }
+  // 今回押されているキーステータスをセット
+  for (uint8_t i = 0; i < 6; i++) {
+      uint8_t vk;
+      if(keytype==1) vk=hidkey2virtualkey_en[p_usbkb_report->keycode[i]];
+      else vk=hidkey2virtualkey_jp[p_usbkb_report->keycode[i]];
+      if(vk) usbkb_keystatus[vk]=1;
+  }
+  // シフト関連キーのステータスを書き換え
+  if(p_usbkb_report->modifier & CHK_SHIFT_L) usbkb_keystatus[VK_LSHIFT]=1; else usbkb_keystatus[VK_LSHIFT]=0;
+  if(p_usbkb_report->modifier & CHK_SHIFT_R) usbkb_keystatus[VK_RSHIFT]=1; else usbkb_keystatus[VK_RSHIFT]=0;
+  if(p_usbkb_report->modifier & CHK_CTRL_L) usbkb_keystatus[VK_LCONTROL]=1; else usbkb_keystatus[VK_LCONTROL]=0;
+  if(p_usbkb_report->modifier & CHK_CTRL_R) usbkb_keystatus[VK_RCONTROL]=1; else usbkb_keystatus[VK_RCONTROL]=0;
+  if(p_usbkb_report->modifier & CHK_ALT_L) usbkb_keystatus[VK_LMENU]=1; else usbkb_keystatus[VK_LMENU]=0;
+  if(p_usbkb_report->modifier & CHK_ALT_R) usbkb_keystatus[VK_RMENU]=1; else usbkb_keystatus[VK_RMENU]=0;
+  if(p_usbkb_report->modifier & CHK_WIN_L) usbkb_keystatus[VK_LWIN]=1; else usbkb_keystatus[VK_LWIN]=0;
+  if(p_usbkb_report->modifier & CHK_WIN_R) usbkb_keystatus[VK_RWIN]=1; else usbkb_keystatus[VK_RWIN]=0;
 
+
+    prev_report = *p_usbkb_report;
+}
+
+void usbkbled_task(void){
+  if(!usbkb_mounted()) return;
+  if (board_millis() < usbkbled_timer) return;
   if(lockkeychanged){
     // Set Lock keys LED
     tuh_hid_set_report(USBKB_dev_addr,USBKB_instance,0,HID_REPORT_TYPE_OUTPUT,&lockkey,sizeof(lockkey));
@@ -156,9 +165,8 @@ void usbkb_task(void){
     printstr("Set LED completed\n");
 #endif
     lockkeychanged=false;
+    usbkbled_timer=board_millis()+USBKBLED_TIMER_INTERVAL;
   }
-
-    prev_report = *p_usbkb_report;
 }
 
 #ifdef USBKBDEBUG
@@ -373,16 +381,19 @@ if(!usbkb_mounted()) return;
 // can be used to parse common/simple enough descriptor.
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
 {
+  // Interface protocol (hid_interface_protocol_enum_t)
+  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+
 #ifdef USBKBDEBUG
+  printstr("tuh_hid_mount_cb invoked\n");
   printstr("HID device address = ");
   printnum(dev_addr);
   printstr(", instance = ");
   printnum(instance);
+  printstr(", HID protocol = ");
+  printnum(itf_protocol);
   printstr(" is mounted\n");
 #endif
-
-  // Interface protocol (hid_interface_protocol_enum_t)
-  uint8_t const itf_protocol = tuh_hid_interface_protocol(dev_addr, instance);
 
   hid_info[instance].report_count = tuh_hid_parse_report_descriptor(hid_info[instance].report_info, MAX_REPORT, desc_report, desc_len);
 #ifdef USBKBDEBUG
@@ -399,20 +410,16 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
     USBKB_instance=instance;
     keycodebufp1=keycodebuf;
     keycodebufp2=keycodebuf;
-    ps2shiftkey_a=(uint16_t)lockkey<<8; //Lock関連キーを変数lockkeyで初期化
-    ps2shiftkey=lockkey<<4; //Lock関連キーを変数lockkeyで初期化
-    for(int i=0;i<256;i++) ps2keystatus[i]=0; //全キー離した状態
+    usbkb_shiftkey_a=(uint16_t)lockkey<<8; //Lock関連キーを変数lockkeyで初期化
+    usbkb_shiftkey=lockkey<<4; //Lock関連キーを変数lockkeyで初期化
+    for(int i=0;i<256;i++) usbkb_keystatus[i]=0; //全キー離した状態
     lockkeychanged=true;
+    usbkbled_timer=board_millis()+USBKBLED_TIMER_INTERVAL;
   }
 
   // request to receive report
   // tuh_hid_report_received_cb() will be invoked when report is available
-  if ( !tuh_hid_receive_report(dev_addr, instance) )
-  {
-#ifdef USBKBDEBUG
-    printstr("Error: cannot request to receive report\n");
-#endif
-  }
+  tuh_hid_receive_report(dev_addr, instance);
 }
 
 void tuh_hid_set_report_complete_cb(uint8_t dev_addr, uint8_t instance, uint8_t report_id, uint8_t report_type, uint16_t len)
@@ -465,12 +472,15 @@ bool usbkb_init(void){
 void usbkb_polling(void){
   tuh_task();
   usbkb_task();
+  usbkbled_task();
 }
 
+// USBキーボードが接続されていればtrueを返す
 bool usbkb_mounted(void){
   return USBKB_dev_addr!=0xFF?true:false;
 }
-uint8_t usbreadkey(void){
+
+uint8_t usbkb_readkey(void){
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
 // 下位8ビット：キーコード
 // 上位8ビット：シフト状態
@@ -533,5 +543,5 @@ uint8_t usbreadkey(void){
 uint8_t shiftkeys(void){
 // SHIFT関連キーの押下状態を返す
 // 上位から<0><SCRLK><CAPSLK><NUMLK><Wiin><ALT><SHIFT><CTRL>
-	return ps2shiftkey;
+	return usbkb_shiftkey;
 }

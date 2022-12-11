@@ -173,7 +173,7 @@ extern uint16_t keycodebuf[]; //キーコードバッファ
 extern uint16_t * volatile keycodebufp1; //キーコード書き込み先頭ポインタ
 extern uint16_t * volatile keycodebufp2; //キーコード読み出し先頭ポインタ
 
-extern volatile uint8_t keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
+extern volatile uint8_t usbkb_keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
 extern volatile uint16_t vkey; //仮想キーコード
 extern uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 extern uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
@@ -182,7 +182,7 @@ bool usbkb_init(void); // USBキーボードライブラリ初期化
 void usbkb_polling(void); // USBキーボード利用時に常時ポーリングするタスク
 bool usbkb_mounted(void); // USBキーボードが接続されていればtrue
 unsigned char shiftkeys(void); // SHIFT関連キーの押下状態を返す
-unsigned char usbreadkey(void);
+unsigned char usbkb_readkey(void);
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
 // 下位8ビット：キーコード
 // 上位8ビット：シフト状態（押下：1）、上位から<0><CAPSLK><NUMLK><SCRLK><Win><ALT><CTRL><SHIFT>
