@@ -9,30 +9,30 @@
 
 
 void led_blinking_task(int cursor_on) {
-    const uint32_t interval_ms = 250;
-    static uint32_t start_ms = 0;
+	const uint32_t interval_ms = 250;
+	static uint32_t start_ms = 0;
 
-    static bool led_state = false;
-    static unsigned char cursorchar=0;
+	static bool led_state = false;
+	static unsigned char cursorchar=0;
 
-    // Blink every interval ms
-    if (board_millis() - start_ms < interval_ms) return; // not enough time
-    start_ms += interval_ms;
-    board_led_write(led_state);
-    led_state = 1 - led_state; // toggle
+	// Blink every interval ms
+	if (board_millis() - start_ms < interval_ms) return; // not enough time
+	start_ms += interval_ms;
+	board_led_write(led_state);
+	led_state = 1 - led_state; // toggle
 
-    if(cursor_on){
-      cursorchar^=0x87;
-      printchar(cursorchar);
-      cursor--;
-    }
+	if(cursor_on){
+		cursorchar^=0x87;
+		printchar(cursorchar);
+		cursor--;
+	}
 }
 
 void core1_entry(void){
-  while(1){
-    usbkb_polling();
-    sleep_us(100);
-  }
+	while(1){
+		usbkb_polling();
+		sleep_us(100);
+	}
 }
 
 int main(void) {
@@ -61,37 +61,36 @@ int main(void) {
 	gpio_init(PICO_DEFAULT_LED_PIN);  // on board LED
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-  lockkey=1; // 下位3ビットが<SCRLK><CAPSLK><NUMLK>
-  keytype=0; // 0：日本語109キー、1：英語104キー
-  if(!usbkb_init()){
-      return 1;
-  }
-  printstr("Init USB OK\n");
-  multicore_launch_core1(core1_entry);
-  while(1){
-    while(1){
-      if(usbkb_mounted()){
-        printstr("USB Keyboard found\n");
-        break;
-      }
-      led_blinking_task(0);
-      sleep_ms(16);
-    }
-    while (1) {
-      if(usbkb_mounted()){
-        uint8_t ch=usbkb_readkey();
-        uint8_t vk=(uint8_t)vkey;
-        uint8_t sh=vkey>>8;
-        if(ch) printchar(ch);
-        if(vk==VK_RETURN) printstr(" \n");
-      }
-      else{
-        printstr("\nUSB Keyboard unmounted\n");
-        break;
-      }
-      led_blinking_task(1);
-      sleep_ms(16);
-    }
-
-  }
+	lockkey=1; // 下位3ビットが<SCRLK><CAPSLK><NUMLK>
+	keytype=0; // 0：日本語109キー、1：英語104キー
+	if(!usbkb_init()){
+		return 1;
+	}
+	printstr("Init USB OK\n");
+	multicore_launch_core1(core1_entry);
+	while(1){
+		while(1){
+			if(usbkb_mounted()){
+				printstr("USB Keyboard found\n");
+				break;
+			}
+			led_blinking_task(0);
+			sleep_ms(16);
+		}
+		while (1) {
+			if(usbkb_mounted()){
+				uint8_t ch=usbkb_readkey();
+				uint8_t vk=(uint8_t)vkey;
+				uint8_t sh=vkey>>8;
+				if(ch) printchar(ch);
+				if(vk==VK_RETURN) printstr(" \n");
+			}
+			else{
+				printstr("\nUSB Keyboard unmounted\n");
+				break;
+			}
+			led_blinking_task(1);
+			sleep_ms(16);
+		}
+	}
 }
