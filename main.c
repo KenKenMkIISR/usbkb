@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "hardware/spi.h"
 #include "usbkeyboard.h"
 #include "bsp/board.h"
@@ -25,6 +26,13 @@ void led_blinking_task(int cursor_on) {
       printchar(cursorchar);
       cursor--;
     }
+}
+
+void core1_entry(void){
+  while(1){
+    usbkb_polling();
+    sleep_us(100);
+  }
 }
 
 int main(void) {
@@ -55,22 +63,21 @@ int main(void) {
 
   lockkey=1; // 下位3ビットが<SCRLK><CAPSLK><NUMLK>
   keytype=0; // 0：日本語109キー、1：英語104キー
-  if(usbkb_init()){
+  if(!usbkb_init()){
       return 1;
   }
   printstr("Init USB OK\n");
+  multicore_launch_core1(core1_entry);
   while(1){
     while(1){
-      usbkb_polling();
       if(usbkb_mounted()){
         printstr("USB Keyboard found\n");
         break;
       }
       led_blinking_task(0);
-//      sleep_ms(1);
+      sleep_ms(16);
     }
     while (1) {
-      usbkb_polling();
       if(usbkb_mounted()){
         uint8_t ch=usbkb_readkey();
         uint8_t vk=(uint8_t)vkey;
@@ -83,7 +90,7 @@ int main(void) {
         break;
       }
       led_blinking_task(1);
-//      sleep_ms(1);
+      sleep_ms(16);
     }
 
   }

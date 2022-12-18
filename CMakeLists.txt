@@ -26,7 +26,7 @@ target_include_directories(usbkb PUBLIC
 )
 
 # Pull in basic dependencies
-target_link_libraries(usbkb pico_stdlib tinyusb_host tinyusb_board hardware_spi)
+target_link_libraries(usbkb pico_stdlib tinyusb_host tinyusb_board hardware_spi pico_multicore)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(usbkb)

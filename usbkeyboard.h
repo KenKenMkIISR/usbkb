@@ -174,7 +174,7 @@ extern uint16_t * volatile keycodebufp1; //キーコード書き込み先頭ポ�
 extern uint16_t * volatile keycodebufp2; //キーコード読み出し先頭ポインタ
 
 extern volatile uint8_t usbkb_keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
-extern volatile uint16_t vkey; //仮想キーコード
+extern uint16_t vkey; // usbkb_readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
 extern uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 extern uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
 

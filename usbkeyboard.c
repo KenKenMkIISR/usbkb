@@ -1,6 +1,7 @@
 #include "bsp/board.h"
 #include "tusb.h"
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
 #include "usbkeyboard.h"
 #include "../lcd-lib/LCDdriver.h"
 #include "../lcd-lib/graphlib.h"
@@ -20,10 +21,11 @@ uint8_t volatile usbkb_shiftkey; //シフト、コントロールキー等の状
 uint16_t keycodebuf[KEYCODEBUFSIZE]; //キーコードバッファ
 uint16_t * volatile keycodebufp1; //キーコード書き込み先頭ポインタ
 uint16_t * volatile keycodebufp2; //キーコード読み出し先頭ポインタ
+semaphore_t keycodebuf_sem; //キーコードバッファ用セマフォ
 
 //公開変数
 volatile uint8_t usbkb_keystatus[256]; // 仮想コードに相当するキーの状態（Onの時1）
-volatile uint16_t vkey; // usbkb_readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
+uint16_t vkey; // usbkb_readkey()関数でセットされるキーコード、上位8ビットはシフト関連キー
 uint8_t lockkey; // 初期化時にLockキーの状態指定。下位3ビットが<SCRLK><CAPSLK><NUMLK>
 uint8_t keytype; // キーボードの種類。0：日本語109キー、1：英語104キー
 
@@ -74,56 +76,71 @@ void shiftkeycheck(uint8_t const modifier){
 #ifdef USBKBDEBUG
 void dispkeys(hid_keyboard_report_t const *p_report);
 #endif
+
+// hid keyboard reportをusbkb_reportに取り込む
+// 実際の処理は別途定期的に行う
+// 複数キー同時押下エラー（キーコード=1が含まれる）場合無視する
 void process_kbd_report(hid_keyboard_report_t const *p_new_report) {
 #ifdef USBKBDEBUG
   dispkeys(p_new_report);
 #endif
-  // hid keyboard reportをusbkb_reportに取り込む
-  // 実際の処理は別途定期的に行う
-  // 複数キー同時押下エラー（キーコード=1が含まれる）場合無視する
   if(p_new_report->keycode[0]!=1) usbkb_report=*p_new_report;
 }
 
-void usbkb_task(void){
+// キーコードバッファに書き込み
+// バッファフルで書き込めない場合はfalseを返す
+static bool pushkeycodebuf(uint16_t k){
+  if((keycodebufp2-keycodebufp1==1) || (keycodebufp1-keycodebufp2==KEYCODEBUFSIZE-1)) return false;
+  *keycodebufp1++=k;
+  if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
+  return true;
+}
+
+// キーコードバッファから読出し
+// バッファが空の場合0を返す
+static uint16_t popkeycodebuf(void){
+  uint16_t vk;
+	if(keycodebufp1==keycodebufp2) return 0;
+	vk=*keycodebufp2++;
+	if(keycodebufp2==keycodebuf+KEYCODEBUFSIZE) keycodebufp2=keycodebuf;
+  return vk;
+}
+
+
 // 押下中のHIDキーコードを読み出し、仮想キーコードに変換
 // keycodebufにためる
+void usbkb_task(void){
   static hid_keyboard_report_t prev_report = {0, 0, {0}}; // previous report to check key released
   static uint16_t oldvkey=0;
   static uint32_t keyrepeattime=0;
-  uint16_t vkey;
+  uint16_t vk2;
   hid_keyboard_report_t *p_usbkb_report=&usbkb_report;
 
   if(!usbkb_mounted()) return;
-  vkey=0;
+  vk2=0;
   shiftkeycheck(p_usbkb_report->modifier);
+  sem_acquire_blocking(&keycodebuf_sem); //セマフォ許可要求
   for (uint8_t i = 0; i < 6; i++) {
     uint8_t vk;
     if(keytype==1) vk=hidkey2virtualkey_en[p_usbkb_report->keycode[i]];
     else vk=hidkey2virtualkey_jp[p_usbkb_report->keycode[i]];
     if(vk==0) continue;
-    vkey=vk;
+    vk2=((uint16_t)usbkb_shiftkey<<8)+vk;
     if(usbkb_keystatus[vk]) continue; // 前回も押されていた場合は無視
     if((usbkb_shiftkey & CHK_CTRL)==0) lockkeycheck(vk); //NumLock、CapsLock、ScrollLock反転処理
-    if((keycodebufp1+1==keycodebufp2) ||
-        (keycodebufp1==keycodebuf+KEYCODEBUFSIZE-1)&&(keycodebufp2==keycodebuf)){
-        break; //バッファがいっぱいの場合無視
-    }
-    *keycodebufp1++=((uint16_t)usbkb_shiftkey<<8)+vk;
-    if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
+    if(!pushkeycodebuf(vk2)) break; //キーコードをバッファにためる、バッファがいっぱいの場合無視
   }
-  vkey|=(uint16_t)usbkb_shiftkey<<8;
-  if(vkey & 0xff && vkey==oldvkey){
+  sem_release(&keycodebuf_sem); //セマフォ許可解除
+  if(vk2 & 0xff && vk2==oldvkey){
       if(time_us_32() >= keyrepeattime){
           keyrepeattime+=KEYREPEAT2*1000;
-          if((keycodebufp1+1!=keycodebufp2) &&
-                  (keycodebufp1!=keycodebuf+KEYCODEBUFSIZE-1)||(keycodebufp2!=keycodebuf)){
-              *keycodebufp1++=vkey;
-              if(keycodebufp1==keycodebuf+KEYCODEBUFSIZE) keycodebufp1=keycodebuf;
-          }
+          sem_acquire_blocking(&keycodebuf_sem); //セマフォ許可要求
+          pushkeycodebuf(vk2);
+          sem_release(&keycodebuf_sem); //セマフォ許可解除
       }
   }
   else{
-      oldvkey=vkey;
+      oldvkey=vk2;
       keyrepeattime=time_us_32()+KEYREPEAT1*1000;
   }
   // 前回押されていたキーステータスをいったん全てクリア
@@ -408,8 +425,6 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
   if(itf_protocol==1){ //HIDキーボードの場合
     USBKB_dev_addr=dev_addr;
     USBKB_instance=instance;
-    keycodebufp1=keycodebuf;
-    keycodebufp2=keycodebuf;
     usbkb_shiftkey_a=(uint16_t)lockkey<<8; //Lock関連キーを変数lockkeyで初期化
     usbkb_shiftkey=lockkey<<4; //Lock関連キーを変数lockkeyで初期化
     for(int i=0;i<256;i++) usbkb_keystatus[i]=0; //全キー離した状態
@@ -462,13 +477,21 @@ void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 #endif
 }
 
+// USBとキーボード関連初期化
 bool usbkb_init(void){
-//    printstr("Initializing USB...");
-    tusb_init();
-//    printstr("OK\n");
-    return 0;
+  USBKB_dev_addr=0xff; //USBキーボード未接続
+  usbkb_shiftkey_a=(uint16_t)lockkey<<8; //Lock関連キーを変数lockkeyで初期化
+  usbkb_shiftkey=lockkey<<4; //Lock関連キーを変数lockkeyで初期化
+  keycodebufp1=keycodebuf; //キーコードバッファ初期化
+  keycodebufp2=keycodebuf; //キーコードバッファ初期化
+  for(int i=0;i<256;i++) usbkb_keystatus[i]=0; //全キー離した状態
+  lockkeychanged=false;
+  sem_init(&keycodebuf_sem, 1, 1); //キーコードバッファ用セマフォ初期化
+  return tusb_init(); //TinyUSB初期化処理
 }
 
+// USBインターフェイス監視とキーボードの処理実施
+// Core1で呼び出す
 void usbkb_polling(void){
   tuh_task();
   usbkb_task();
@@ -480,19 +503,18 @@ bool usbkb_mounted(void){
   return USBKB_dev_addr!=0xFF?true:false;
 }
 
-uint8_t usbkb_readkey(void){
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
 // 下位8ビット：キーコード
 // 上位8ビット：シフト状態
 // 英数・記号文字の場合、戻り値としてASCIIコード（それ以外は0を返す）
-
+uint8_t usbkb_readkey(void){
 	uint16_t k;
 	uint8_t sh;
 
-	vkey=0;
-	if(keycodebufp1==keycodebufp2) return 0;
-	vkey=*keycodebufp2++;
-	if(keycodebufp2==keycodebuf+KEYCODEBUFSIZE) keycodebufp2=keycodebuf;
+  sem_acquire_blocking(&keycodebuf_sem); //セマフォ許可要求
+  vkey=popkeycodebuf();
+  sem_release(&keycodebuf_sem); //セマフォ許可解除
+  if(vkey==0) return 0;
 	sh=vkey>>8;
 	if(sh & (CHK_CTRL | CHK_ALT | CHK_WIN)) return 0;
 	k=vkey & 0xff;
@@ -540,8 +562,8 @@ uint8_t usbkb_readkey(void){
 	else return vk2asc1_jp[k];
 }
 
-uint8_t shiftkeys(void){
 // SHIFT関連キーの押下状態を返す
 // 上位から<0><SCRLK><CAPSLK><NUMLK><Wiin><ALT><SHIFT><CTRL>
+uint8_t shiftkeys(void){
 	return usbkb_shiftkey;
 }
