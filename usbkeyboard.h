@@ -182,11 +182,12 @@ bool usbkb_init(void); // USBキーボードライブラリ初期化
 void usbkb_polling(void); // USBキーボード利用時に常時ポーリングするタスク
 bool usbkb_mounted(void); // USBキーボードが接続されていればtrue
 unsigned char shiftkeys(void); // SHIFT関連キーの押下状態を返す
-unsigned char usbkb_readkey(void);
+
 // 入力された1つのキーのキーコードをグローバル変数vkeyに格納（押されていなければ0を返す）
 // 下位8ビット：キーコード
 // 上位8ビット：シフト状態（押下：1）、上位から<0><CAPSLK><NUMLK><SCRLK><Win><ALT><CTRL><SHIFT>
 // 英数・記号文字の場合、戻り値としてASCIIコード（それ以外は0を返す）
+unsigned char usbkb_readkey(void);
 
 // Macro(s) follows(s)
 #define keycodeExists() (keycodebufp1!=keycodebufp2)
